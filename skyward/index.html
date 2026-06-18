@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Skyward — prototype</title>
+<style>
+  :root{
+    --ink:#0d1b2a;
+    --paper:#f7f3e9;
+    --sun:#ffd166;
+    --accent:#ef8354;
+    --mono:"SFMono-Regular",ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+    --sans:"Avenir Next","Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:#10151f}
+  #scene{position:fixed;inset:0;display:block}
+  /* HUD */
+  #hud{position:fixed;inset:0;pointer-events:none;font-family:var(--sans);color:var(--paper)}
+  .panel{
+    position:absolute;top:18px;left:18px;
+    background:rgba(13,27,42,.45);backdrop-filter:blur(6px);
+    border:1px solid rgba(247,243,233,.18);border-radius:14px;
+    padding:12px 16px;line-height:1.5;
+  }
+  .count{font-size:30px;font-weight:700;letter-spacing:-.02em}
+  .count small{font-size:13px;font-weight:500;opacity:.7;letter-spacing:0}
+  .meta{margin-top:6px;font-family:var(--mono);font-size:12px;opacity:.85}
+  .meta b{color:var(--sun);font-weight:600}
+  #keys{
+    position:absolute;bottom:16px;left:18px;
+    font-family:var(--mono);font-size:11.5px;color:var(--paper);
+    background:rgba(13,27,42,.4);border:1px solid rgba(247,243,233,.14);
+    border-radius:12px;padding:9px 13px;line-height:1.7;opacity:.9
+  }
+  #keys kbd{
+    display:inline-block;background:rgba(247,243,233,.14);border:1px solid rgba(247,243,233,.22);
+    border-radius:5px;padding:0 6px;margin:0 1px;font-family:inherit
+  }
+  #toast{
+    position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(.9);
+    font-family:var(--sans);font-size:42px;font-weight:800;letter-spacing:-.03em;
+    color:var(--sun);text-shadow:0 4px 24px rgba(0,0,0,.5);opacity:0;
+    transition:opacity .4s, transform .4s;text-align:center
+  }
+  #toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+  /* start overlay */
+  #start{
+    position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(120% 100% at 50% 0%, #2a3b55 0%, #10151f 70%);
+    color:var(--paper);font-family:var(--sans);text-align:center;z-index:10;cursor:pointer
+  }
+  #start h1{font-size:64px;font-weight:800;letter-spacing:-.04em;margin-bottom:6px}
+  #start h1 span{color:var(--sun)}
+  #start p{opacity:.8;font-size:16px;max-width:440px;line-height:1.6}
+  #start .go{
+    margin-top:26px;font-family:var(--mono);font-size:13px;letter-spacing:.08em;text-transform:uppercase;
+    border:1px solid rgba(247,243,233,.4);border-radius:999px;padding:12px 26px
+  }
+  #start .go b{color:var(--sun)}
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="hud">
+  <div class="panel">
+    <div class="count"><span id="coins">0</span> <small>/ <span id="total">0</span> sunshards</small></div>
+    <div class="meta"><b id="clock">dawn</b> · <span id="weather">clear</span></div>
+  </div>
+  <div id="toast"></div>
+  <div id="keys">
+    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>Shift</kbd> sprint<br>
+    <kbd>Space</kbd> jump / double-jump &nbsp; <kbd>F</kbd> air dash<br>
+    drag mouse / <kbd>←</kbd><kbd>→</kbd> look &nbsp; wheel zoom &nbsp; <kbd>R</kbd> weather
+  </div>
+</div>
+
+<div id="start">
+  <h1>Sky<span>ward</span></h1>
+  <p>A grey-box of a wandering platformer. Climb to the high places, gather the sunshards, watch the day turn. There's no failing here — just see if moving around feels good.</p>
+  <div class="go">click to <b>begin</b></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+(function () {
+  // ---------------------------------------------------------------------------
+  // Core setup
+  // ---------------------------------------------------------------------------
+  const canvas = document.getElementById("scene");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9fc2e0);
+  scene.fog = new THREE.Fog(0x9fc2e0, 40, 160);
+
+  const camera = new THREE.PerspectiveCamera(
+    60, window.innerWidth / window.innerHeight, 0.1, 500
+  );
+
+  // Lights -------------------------------------------------------------------
+  const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x4a4032, 0.6);
+  scene.add(hemi);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.25);
+  scene.add(ambient);
+  const sun = new THREE.DirectionalLight(0xfff2d6, 1.1);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 220;
+  sun.shadow.camera.left = -70;
+  sun.shadow.camera.right = 70;
+  sun.shadow.camera.top = 70;
+  sun.shadow.camera.bottom = -70;
+  sun.shadow.bias = -0.0005;
+  scene.add(sun);
+  scene.add(sun.target);
+
+  // ---------------------------------------------------------------------------
+  // World: static collidable boxes + decoration
+  // ---------------------------------------------------------------------------
+  const colliders = []; // {min:Vector3, max:Vector3}
+
+  function addBox(x, y, z, w, h, d, color, opts) {
+    opts = opts || {};
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mat = new THREE.MeshStandardMaterial({
+      color: color,
+      roughness: opts.rough != null ? opts.rough : 0.9,
+      metalness: 0.0,
+      flatShading: !!opts.flat,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = !opts.noCast;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    if (!opts.noCollide) {
+      colliders.push({
+        min: new THREE.Vector3(x - w / 2, y - h / 2, z - d / 2),
+        max: new THREE.Vector3(x + w / 2, y + h / 2, z + d / 2),
+      });
+    }
+    return mesh;
+  }
+
+  function addCone(x, y, z, r, h, color) {
+    const geo = new THREE.ConeGeometry(r, h, 7);
+    const mat = new THREE.MeshStandardMaterial({ color: color, roughness: 1, flatShading: true });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y + h / 2, z);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+  }
+
+  // ground
+  addBox(0, -1, 0, 120, 2, 120, 0x6f8f5e, { rough: 1 });
+
+  // a gentle palette for the climb — each tier a little lighter / warmer
+  const tier = [0x7d9b6a, 0x90a96f, 0xa6b277, 0xc2b87a, 0xd9c184];
+
+  // central stepped mound the player climbs
+  addBox(0, 0.5, 0, 26, 3, 26, tier[0]);
+  addBox(0, 2.5, -2, 18, 3, 18, tier[1]);
+  addBox(0, 4.5, -3, 11, 3, 11, tier[2]);
+  addBox(0, 6.5, -3, 6, 3, 6, tier[3]);
+  // little summit spire + the prize sits up here
+  addBox(0, 8.5, -3, 3, 3, 3, tier[4]);
+
+  // scattered approach platforms (verticality / "get up there" moments)
+  addBox(-18, 1, 12, 6, 2, 6, 0x8a9c6e);
+  addBox(-24, 3, 6, 5, 2, 5, 0x9aa873);
+  addBox(-21, 5, -2, 4.5, 2, 4.5, 0xb0b079);
+  addBox(16, 1.5, 14, 7, 3, 7, 0x8a9c6e);
+  addBox(22, 4, 8, 5, 2, 5, 0x9aa873);
+
+  // floating islands reachable by double-jump + dash
+  addBox(12, 7, -16, 6, 1.5, 6, 0xcdbf86, { flat: true });
+  addBox(20, 9.5, -22, 5, 1.5, 5, 0xd8c98c, { flat: true });
+  addBox(-14, 8, -18, 6, 1.5, 6, 0xcdbf86, { flat: true });
+
+  // a low ring of pillars for parkour near the edge
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const r = 36;
+    addBox(Math.cos(a) * r, 1 + i * 0.6, Math.sin(a) * r, 3, 2 + i * 1.2, 3, 0x7a8a66);
+  }
+
+  // decorative trees (no collision)
+  const treeSpots = [[-30, 0, 28], [34, 0, 26], [-38, 0, -10], [30, 0, -30], [-8, 0, 40], [44, 0, 4]];
+  for (const t of treeSpots) {
+    addBox(t[0], 1.2, t[2], 0.8, 2.4, 0.8, 0x6b4f3a, { noCollide: true, noCast: false });
+    addCone(t[0], 2.2, t[2], 2.2, 4.5, 0x3f7a4d);
+    addCone(t[0], 4.5, t[2], 1.5, 3.2, 0x4d8a57);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Player
+  // ---------------------------------------------------------------------------
+  const player = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xef8354, roughness: 0.55 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.42, 1.1, 16), bodyMat);
+  body.position.y = 0.55; body.castShadow = true;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 20, 16), bodyMat);
+  head.position.y = 1.35; head.castShadow = true;
+  // a little nose so facing direction is readable
+  const nose = new THREE.Mesh(
+    new THREE.ConeGeometry(0.12, 0.3, 10),
+    new THREE.MeshStandardMaterial({ color: 0x0d1b2a })
+  );
+  nose.rotation.x = Math.PI / 2; nose.position.set(0, 1.35, 0.4);
+  player.add(body, head, nose);
+  player.position.set(0, 6, 18);
+  scene.add(player);
+
+  const HALF = new THREE.Vector3(0.42, 0.85, 0.42); // player AABB half-extents
+  const PLAYER_CENTER_Y = 0.85; // player.position is at feet; center = pos + this
+  const vel = new THREE.Vector3(0, 0, 0);
+  let grounded = false;
+  let jumpsLeft = 0;
+  let dashCd = 0;
+  let facing = 0;
+
+  // ---------------------------------------------------------------------------
+  // Collectibles
+  // ---------------------------------------------------------------------------
+  const shards = [];
+  function addShard(x, y, z) {
+    const g = new THREE.IcosahedronGeometry(0.45, 0);
+    const m = new THREE.MeshStandardMaterial({
+      color: 0xffd166, emissive: 0xd98b2b, emissiveIntensity: 0.6, roughness: 0.3, metalness: 0.2,
+    });
+    const mesh = new THREE.Mesh(g, m);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    const light = new THREE.PointLight(0xffd166, 0.7, 6);
+    light.position.copy(mesh.position);
+    scene.add(mesh); scene.add(light);
+    shards.push({ mesh, light, baseY: y, taken: false });
+  }
+  // place shards: ground level, mid-climb, summit, and the tricky floaters
+  addShard(0, 11, -3);      // summit prize
+  addShard(-18, 2.6, 12);
+  addShard(-24, 4.6, 6);
+  addShard(16, 3.6, 14);
+  addShard(22, 6, 8);
+  addShard(12, 8.6, -16);   // floating island
+  addShard(20, 11.1, -22);  // far floating island
+  addShard(-14, 9.6, -18);
+  addShard(8, 0.6, 22);
+  addShard(-30, 0.6, 0);
+  addShard(0, 4.4, 6);      // tucked on the climb
+  addShard(28, 0.6, -18);
+
+  let collected = 0;
+  const total = shards.length;
+  document.getElementById("total").textContent = total;
+
+  // ---------------------------------------------------------------------------
+  // Weather: rain particle system + state
+  // ---------------------------------------------------------------------------
+  const RAIN_N = 1400;
+  const rainGeo = new THREE.BufferGeometry();
+  const rainPos = new Float32Array(RAIN_N * 3);
+  for (let i = 0; i < RAIN_N; i++) {
+    rainPos[i * 3] = (Math.random() - 0.5) * 120;
+    rainPos[i * 3 + 1] = Math.random() * 60;
+    rainPos[i * 3 + 2] = (Math.random() - 0.5) * 120;
+  }
+  rainGeo.setAttribute("position", new THREE.BufferAttribute(rainPos, 3));
+  const rainMat = new THREE.PointsMaterial({ color: 0xaecbe8, size: 0.18, transparent: true, opacity: 0.6 });
+  const rain = new THREE.Points(rainGeo, rainMat);
+  rain.visible = false;
+  scene.add(rain);
+
+  const WEATHER = ["clear", "fog", "rain"];
+  let weather = 0;
+  function applyWeather() {
+    const w = WEATHER[weather];
+    document.getElementById("weather").textContent = w;
+    rain.visible = w === "rain";
+    if (w === "fog") { scene.fog.near = 12; scene.fog.far = 70; }
+    else if (w === "rain") { scene.fog.near = 25; scene.fog.far = 110; }
+    else { scene.fog.near = 40; scene.fog.far = 170; }
+  }
+  applyWeather();
+
+  // ---------------------------------------------------------------------------
+  // Input
+  // ---------------------------------------------------------------------------
+  const keys = Object.create(null);
+  let camYaw = 0;           // camera behind player, looking toward the mound
+  let camPitch = 0.35;
+  let camDist = 11;
+
+  window.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    if (k === " ") e.preventDefault();
+    if (!keys[k]) {
+      if (k === " ") tryJump();
+      if (k === "f") tryDash();
+      if (k === "r") { weather = (weather + 1) % WEATHER.length; applyWeather(); }
+    }
+    keys[k] = true;
+  });
+  window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener("mousedown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    camYaw -= (e.clientX - lastX) * 0.005;
+    camPitch = clamp(camPitch + (e.clientY - lastY) * 0.004, -0.2, 1.1);
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    camDist = clamp(camDist + e.deltaY * 0.01, 5, 22);
+  }, { passive: false });
+
+  // basic touch: one finger looks, drag pushes forward
+  let touchId = null;
+  canvas.addEventListener("touchstart", (e) => {
+    const t = e.changedTouches[0]; touchId = t.identifier; lastX = t.clientX; lastY = t.clientY;
+  });
+  canvas.addEventListener("touchmove", (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === touchId) {
+        camYaw -= (t.clientX - lastX) * 0.005;
+        camPitch = clamp(camPitch + (t.clientY - lastY) * 0.004, -0.2, 1.1);
+        lastX = t.clientX; lastY = t.clientY;
+      }
+    }
+  }, { passive: true });
+
+  function tryJump() {
+    if (grounded) { vel.y = 11; grounded = false; jumpsLeft = 1; }
+    else if (jumpsLeft > 0) { vel.y = 9.5; jumpsLeft--; }
+  }
+  function tryDash() {
+    if (dashCd > 0) return;
+    const dir = wishDir.lengthSq() > 0.01
+      ? wishDir.clone().normalize()
+      : new THREE.Vector3(Math.sin(facing), 0, Math.cos(facing));
+    vel.x += dir.x * 16;
+    vel.z += dir.z * 16;
+    if (vel.y < 4) vel.y = 4; // tiny lift so dashes carry across gaps
+    dashCd = 0.9;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  const wishDir = new THREE.Vector3();
+
+  // axis-separated AABB resolution against static boxes
+  function resolve(axis) {
+    const cx = player.position.x;
+    const cy = player.position.y + PLAYER_CENTER_Y;
+    const cz = player.position.z;
+    const pmin = { x: cx - HALF.x, y: cy - HALF.y, z: cz - HALF.z };
+    const pmax = { x: cx + HALF.x, y: cy + HALF.y, z: cz + HALF.z };
+    for (const b of colliders) {
+      if (pmax.x <= b.min.x || pmin.x >= b.max.x) continue;
+      if (pmax.y <= b.min.y || pmin.y >= b.max.y) continue;
+      if (pmax.z <= b.min.z || pmin.z >= b.max.z) continue;
+      // overlapping → push out along the moving axis
+      if (axis === "y") {
+        if (vel.y <= 0) { player.position.y = b.max.y - PLAYER_CENTER_Y + HALF.y; grounded = true; }
+        else { player.position.y = b.min.y - PLAYER_CENTER_Y - HALF.y; }
+        vel.y = 0;
+      } else if (axis === "x") {
+        if (vel.x > 0) player.position.x = b.min.x - HALF.x; else player.position.x = b.max.x + HALF.x;
+        vel.x = 0;
+      } else {
+        if (vel.z > 0) player.position.z = b.min.z - HALF.z; else player.position.z = b.max.z + HALF.z;
+        vel.z = 0;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Day / night
+  // ---------------------------------------------------------------------------
+  let timeOfDay = 0.28; // 0..1, start mid-morning-ish
+  const skyDay = new THREE.Color(0x9fc2e0);
+  const skyDusk = new THREE.Color(0xe89b6c);
+  const skyNight = new THREE.Color(0x0c1428);
+  const lightDay = new THREE.Color(0xfff2d6);
+  const lightDusk = new THREE.Color(0xffb27a);
+  const lightNight = new THREE.Color(0x6b78b0);
+
+  function updateSky() {
+    const ang = timeOfDay * Math.PI * 2;          // 0 = sunrise east
+    const elev = Math.sin(ang);                    // -1..1
+    const sx = Math.cos(ang) * 90;
+    sun.position.set(sx, Math.max(elev, -0.4) * 90, 30);
+    sun.target.position.set(0, 0, 0);
+    const day = clamp((elev + 0.15) / 0.6, 0, 1);  // 1 high noon, 0 below horizon
+    const lowSun = clamp(1 - Math.abs(elev) / 0.35, 0, 1); // warm band near horizon
+
+    const sky = new THREE.Color().copy(skyNight).lerp(skyDay, day);
+    sky.lerp(skyDusk, lowSun * 0.6);
+    scene.background.copy(sky);
+    if (WEATHER[weather] !== "fog") scene.fog.color.copy(sky);
+
+    const lc = new THREE.Color().copy(lightNight).lerp(lightDay, day);
+    lc.lerp(lightDusk, lowSun * 0.7);
+    sun.color.copy(lc);
+    sun.intensity = 0.15 + day * 1.05;
+    hemi.intensity = 0.25 + day * 0.5;
+    ambient.intensity = 0.12 + day * 0.18;
+
+    const label =
+      elev < -0.1 ? "night" :
+      timeOfDay < 0.25 ? "dawn" :
+      timeOfDay < 0.45 ? "morning" :
+      timeOfDay < 0.55 ? "noon" :
+      timeOfDay < 0.75 ? "afternoon" : "dusk";
+    document.getElementById("clock").textContent = label;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Toast
+  // ---------------------------------------------------------------------------
+  const toastEl = document.getElementById("toast");
+  let toastT = 0;
+  function toast(msg) { toastEl.textContent = msg; toastEl.classList.add("show"); toastT = 1.2; }
+
+  // ---------------------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------------------
+  const clock = new THREE.Clock();
+  let running = false;
+
+  function tick() {
+    requestAnimationFrame(tick);
+    let dt = clock.getDelta();
+    if (dt > 0.05) dt = 0.05; // clamp big frame gaps
+    if (!running) { renderer.render(scene, camera); return; }
+
+    // --- movement input relative to camera yaw ---
+    const fwd = new THREE.Vector3(-Math.sin(camYaw), 0, -Math.cos(camYaw));
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    wishDir.set(0, 0, 0);
+    if (keys["w"]) wishDir.add(fwd);
+    if (keys["s"]) wishDir.sub(fwd);
+    if (keys["d"]) wishDir.add(right);
+    if (keys["a"]) wishDir.sub(right);
+    const sprint = keys["shift"] ? 1.7 : 1;
+    const speed = 6 * sprint;
+    if (wishDir.lengthSq() > 0.0001) {
+      wishDir.normalize();
+      facing = Math.atan2(wishDir.x, wishDir.z);
+    }
+    // accelerate toward wish velocity (snappy on ground, floatier in air)
+    const accel = grounded ? 14 : 6;
+    const targetX = wishDir.x * speed;
+    const targetZ = wishDir.z * speed;
+    vel.x += (targetX - vel.x) * Math.min(accel * dt, 1);
+    vel.z += (targetZ - vel.z) * Math.min(accel * dt, 1);
+
+    // --- integrate with gravity + per-axis collision ---
+    grounded = false;
+    player.position.x += vel.x * dt; resolve("x");
+    player.position.z += vel.z * dt; resolve("z");
+    vel.y -= 26 * dt;
+    player.position.y += vel.y * dt; resolve("y");
+    if (grounded) jumpsLeft = 1; // re-arm one air jump whenever standing on ground
+
+    if (dashCd > 0) dashCd -= dt;
+
+    // fell off the world → respawn
+    if (player.position.y < -25) {
+      player.position.set(0, 6, 18); vel.set(0, 0, 0);
+    }
+
+    // smooth body rotation toward facing
+    let d = facing - player.rotation.y;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    player.rotation.y += d * Math.min(12 * dt, 1);
+
+    // --- camera follow ---
+    const tgt = new THREE.Vector3(player.position.x, player.position.y + 1.2, player.position.z);
+    const cp = new THREE.Vector3(
+      tgt.x + Math.sin(camYaw) * Math.cos(camPitch) * camDist,
+      tgt.y + Math.sin(camPitch) * camDist,
+      tgt.z + Math.cos(camYaw) * Math.cos(camPitch) * camDist
+    );
+    camera.position.lerp(cp, Math.min(10 * dt, 1));
+    camera.lookAt(tgt);
+
+    // --- collectibles ---
+    for (const s of shards) {
+      if (s.taken) continue;
+      s.mesh.rotation.y += dt * 1.6;
+      s.mesh.position.y = s.baseY + Math.sin(clock.elapsedTime * 2 + s.baseY) * 0.18;
+      s.light.position.copy(s.mesh.position);
+      if (s.mesh.position.distanceTo(new THREE.Vector3(
+        player.position.x, player.position.y + 1, player.position.z)) < 1.4) {
+        s.taken = true; s.mesh.visible = false; s.light.visible = false;
+        collected++;
+        document.getElementById("coins").textContent = collected;
+        toast(collected === total ? "every shard gathered ✦" : "✦");
+      }
+    }
+
+    // --- weather / sky / time ---
+    timeOfDay = (timeOfDay + dt / 90) % 1; // full day ≈ 90s
+    updateSky();
+    if (rain.visible) {
+      const p = rainGeo.attributes.position.array;
+      for (let i = 0; i < RAIN_N; i++) {
+        p[i * 3 + 1] -= 40 * dt;
+        if (p[i * 3 + 1] < 0) {
+          p[i * 3 + 1] = 60;
+          p[i * 3] = player.position.x + (Math.random() - 0.5) * 120;
+          p[i * 3 + 2] = player.position.z + (Math.random() - 0.5) * 120;
+        }
+      }
+      rainGeo.attributes.position.needsUpdate = true;
+    }
+
+    if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.classList.remove("show"); }
+
+    renderer.render(scene, camera);
+  }
+  tick();
+
+  // ---------------------------------------------------------------------------
+  // Resize + start
+  // ---------------------------------------------------------------------------
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  const startEl = document.getElementById("start");
+  startEl.addEventListener("click", () => {
+    startEl.style.display = "none";
+    running = true;
+    canvas.focus();
+  });
+})();
+</script>
+</body>
+</html>
